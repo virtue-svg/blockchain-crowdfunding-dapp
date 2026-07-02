@@ -1,0 +1,13 @@
+node_modules/
+artifacts/
+cache/
+coverage/
+coverage.json
+.hhdata/
+.runtime/
+ignition/deployments/
+*.log
+~$*
+
+*.pptx
+最终提交材料/
