@@ -7,7 +7,7 @@ const STATUS=["进行中","成功","失败","已取消"];
 
 const App={
  provider:null,signer:null,account:null,contract:null,address:null,busy:false,chainTime:0,sampledAt:0,events:[],
- async init(){this.bind();if(window.ethereum){ethereum.on("accountsChanged",()=>location.reload());ethereum.on("chainChanged",()=>location.reload());const a=await ethereum.request({method:"eth_accounts"});if(a.length)await this.connect(false)}this.defaultDeadline()},
+ async init(){this.bind();const eventFilter=document.getElementById("eventFilter");const projectId=new URLSearchParams(location.search).get("projectId");if(eventFilter&&projectId!==null)eventFilter.value=projectId;if(window.ethereum){ethereum.on("accountsChanged",()=>location.reload());ethereum.on("chainChanged",()=>location.reload());const a=await ethereum.request({method:"eth_accounts"});if(a.length)await this.connect(false)}this.defaultDeadline()},
  bind(){
   this.on("connect","click",()=>this.connect());
   this.on("createForm","submit",e=>this.create(e));
@@ -48,7 +48,69 @@ const App={
   if(!filtered.length){el.innerHTML='<div class="empty">当前条件下暂无项目</div>';return}
   filtered.forEach(r=>el.append(this.card(r)));
  },
- card(r){const {p,donors,early,donation,points,votes,required,voted}=r,id=Number(p.id),status=Number(p.status),stage=Number(p.milestonesCompleted)+1,isCreator=p.creator.toLowerCase()===this.account.toLowerCase(),remaining=Math.max(0,Number(p.deadline)-this.now()),threshold=stage<4?p.totalRaised*4n>=p.goal*BigInt(stage):status===1,mode=status===0||(status===1&&p.milestonesCompleted>0),release=stage<4?p.goal/4n:p.totalRaised-p.releasedAmount,percent=p.goal?Math.min(100,Number(p.totalRaised*1000n/p.goal)/10):0;const a=document.createElement("article");a.className="card";a.innerHTML=`<div class="card-main"><img class="cover" src="${this.escape(p.imageUrl||'https://images.unsplash.com/photo-1559526324-593bc073d938?auto=format&fit=crop&w=1000&q=70')}" alt="项目封面"><div class="title-row"><div><p class="project-id">项目 #${id} · ${this.escape(p.category)}</p><h3>${this.escape(p.name)}</h3></div><span class="badge ${status===1?'success':status===2?'failed':'active'}">${STATUS[status]}</span></div><p>${this.escape(p.description)}</p><div class="metrics"><div><span>目标</span><strong>${ethers.formatEther(p.goal)} ETH</strong></div><div><span>已筹</span><strong>${ethers.formatEther(p.totalRaised)} ETH</strong></div><div><span>剩余时间</span><strong>${status===0?(remaining?this.duration(remaining):'已到期'):'已结束'}</strong></div><div><span>发起人</span><strong>${this.short(p.creator)}</strong></div></div><div class="bonus"><div><span>里程碑</span><strong>${p.milestonesCompleted}/4</strong></div><div><span>已释放</span><strong>${ethers.formatEther(p.releasedAmount)} ETH</strong></div><div><span>本账户已捐</span><strong>${ethers.formatEther(donation)} ETH</strong></div><div><span>积分/投票</span><strong>${points} / ${votes}/${required}</strong></div></div><div class="progress"><div style="width:${percent}%"></div></div><p class="muted">完成度 ${percent.toFixed(1)}% · 下一阶段预计释放 ${ethers.formatEther(release)} ETH</p><details><summary>链上项目详情</summary><div class="event-meta">完整发起人地址</div><div class="address-list">${p.creator}</div><div class="event-meta">准确截止时间</div><div>${new Date(Number(p.deadline)*1000).toLocaleString()}</div><div class="event-meta">合约状态码</div><div>${status}（${STATUS[status]}）</div></details><details><summary>捐赠者与早期支持者</summary><p>捐赠者</p>${this.list(donors)}<p>早期支持者</p>${this.list(early)}</details><p><a href="./project.html?id=${id}">查看完整详情</a></p></div><div class="card-actions"><input class="amount" type="number" min="0.001" step="0.001" value="0.1"><button class="button primary donate">捐赠</button><button class="button end">结束项目</button><button class="button vote">投票支持第 ${stage} 阶段</button><button class="button release">释放第 ${stage} 阶段（${ethers.formatEther(release)} ETH）</button><button class="button withdraw">发起人一次性提现</button><button class="button refund">领取退款</button><button class="button cancel">取消空项目</button></div>`;const $=s=>a.querySelector(s);$(".cover").onerror=e=>e.target.style.display="none";$(".donate").disabled=status!==0||remaining===0;$(".end").disabled=status!==0||remaining>0;$(".vote").disabled=!mode||!threshold||donation===0n||voted||p.creatorWithdrawn||stage>4;$(".release").disabled=!mode||!threshold||!isCreator||votes<required||p.creatorWithdrawn||stage>4;$(".withdraw").disabled=status!==1||!isCreator||p.creatorWithdrawn||p.milestonesCompleted>0;$(".refund").disabled=status!==2||donation===0n;$(".cancel").disabled=status!==0||!isCreator||p.totalRaised>0n;$(".donate").onclick=()=>this.tx(`向项目 #${id} 捐赠`,()=>this.contract.donate(id,{value:ethers.parseEther($(".amount").value)}));$(".end").onclick=()=>this.tx(`结束项目 #${id}`,()=>this.contract.endProject(id));$(".vote").onclick=()=>this.tx(`为项目 #${id} 第 ${stage} 阶段投票`,()=>this.contract.voteForNextMilestone(id),true);$(".release").onclick=()=>this.tx(`释放项目 #${id} 第 ${stage} 阶段`,()=>this.contract.releaseNextMilestone(id),true);$(".withdraw").onclick=()=>this.tx(`提取项目 #${id} 资金`,()=>this.contract.withdrawFunds(id),true);$(".refund").onclick=async()=>{const amount=await this.contract.getRefundableAmount(id,this.account);if(confirm(`确认领取 ${ethers.formatEther(amount)} ETH 未释放资金吗？`))this.tx(`项目 #${id} 退款`,()=>this.contract.refund(id))};$(".cancel").onclick=()=>this.tx(`取消项目 #${id}`,()=>this.contract.cancelProject(id),true);return a},
+ card(r){
+  const {p,donors,early,donation,points,votes,required,voted}=r;
+  const id=Number(p.id),status=Number(p.status),stage=Number(p.milestonesCompleted)+1;
+  const isCreator=p.creator.toLowerCase()===this.account.toLowerCase();
+  const remaining=Math.max(0,Number(p.deadline)-this.now());
+  const threshold=stage<4?p.totalRaised*4n>=p.goal*BigInt(stage):status===1;
+  const mode=status===0||(status===1&&p.milestonesCompleted>0);
+  const release=stage<4?p.goal/4n:p.totalRaised-p.releasedAmount;
+  const percent=p.goal?Math.min(100,Number(p.totalRaised*1000n/p.goal)/10):0;
+  const isDetailPage=Boolean(document.getElementById("detail"));
+  const role=isCreator?"项目发起人":donation>0n?"项目捐赠者":"观察账户";
+  const reason=this.actionReason({status,isCreator,donation,remaining,p,threshold,voted,votes,required,stage});
+  const milestoneSteps=[1,2,3,4].map(n=>`<div class="milestone-step ${Number(p.milestonesCompleted)>=n?'done':stage===n?'current':''}"><span>${n}</span><small>${n<4?n*25+'%':'结项'}</small></div>`).join("");
+  const a=document.createElement("article");
+  a.className=`card ${isDetailPage?'detail-card':''}`;
+  a.innerHTML=`<div class="card-main">
+   <img class="cover" src="${this.escape(p.imageUrl||'https://images.unsplash.com/photo-1559526324-593bc073d938?auto=format&fit=crop&w=1000&q=70')}" alt="项目封面">
+   <div class="title-row"><div><p class="project-id">项目 #${id} · ${this.escape(p.category)}</p><h3>${this.escape(p.name)}</h3></div><span class="badge ${status===1?'success':status===2?'failed':'active'}">${STATUS[status]}</span></div>
+   <p class="project-description">${this.escape(p.description)}</p>
+   <div class="metrics"><div><span>目标</span><strong>${ethers.formatEther(p.goal)} ETH</strong></div><div><span>已筹</span><strong>${ethers.formatEther(p.totalRaised)} ETH</strong></div><div><span>剩余时间</span><strong>${status===0?(remaining?this.duration(remaining):'已到期'):'已结束'}</strong></div><div><span>发起人</span><strong>${this.short(p.creator)}</strong></div></div>
+   <div class="bonus"><div><span>里程碑</span><strong>${p.milestonesCompleted}/4</strong></div><div><span>已释放</span><strong>${ethers.formatEther(p.releasedAmount)} ETH</strong></div><div><span>本账户已捐</span><strong>${ethers.formatEther(donation)} ETH</strong></div><div><span>积分 / 投票</span><strong>${points} / ${votes}/${required}</strong></div></div>
+   <div class="progress"><div style="width:${percent}%"></div></div><p class="muted progress-caption">完成度 ${percent.toFixed(1)}% · 下一阶段预计释放 ${ethers.formatEther(release)} ETH</p>
+   ${isDetailPage?`<section class="detail-overview"><div><span>当前账户角色</span><strong>${role}</strong></div><div><span>当前可执行操作</span><strong>${this.escape(reason)}</strong></div><div><span>退款池余额</span><strong>${ethers.formatEther(p.refundablePool)} ETH</strong></div><div><span>早期奖励截止</span><strong>${new Date(Number(p.earlyRewardDeadline)*1000).toLocaleString()}</strong></div></section><div class="milestone-track">${milestoneSteps}</div>`:''}
+   <div class="disclosure-stack">
+    <details class="info-disclosure" ${isDetailPage?'open':''}><summary><span><strong>链上项目详情</strong><small>地址、时间与合约状态</small></span><span class="summary-mark">+</span></summary><div class="disclosure-content"><div class="detail-facts"><div class="wide"><span>完整发起人地址</span><code>${p.creator}</code></div><div><span>项目 ID</span><strong>#${id}</strong></div><div><span>分类</span><strong>${this.escape(p.category)}</strong></div><div><span>准确截止时间</span><strong>${new Date(Number(p.deadline)*1000).toLocaleString()}</strong></div><div><span>合约状态码</span><strong>${status} · ${STATUS[status]}</strong></div><div><span>已释放资金</span><strong>${ethers.formatEther(p.releasedAmount)} ETH</strong></div><div><span>发起人是否已结算</span><strong>${p.creatorWithdrawn?'是':'否'}</strong></div></div><div class="action-callout"><span>当前账户</span><strong>${this.escape(reason)}</strong></div></div></details>
+    <details class="info-disclosure supporters" ${isDetailPage?'open':''}><summary><span><strong>捐赠者与早期支持者</strong><small>${donors.length} 位捐赠者 · ${early.length} 位早期支持者</small></span><span class="summary-mark">+</span></summary><div class="disclosure-content supporter-grid"><section><header><strong>项目捐赠者</strong><span>${donors.length}</span></header>${this.supporterList(donors,"尚无捐赠者")}</section><section><header><strong>早期支持者</strong><span>${early.length}/10</span></header>${this.supporterList(early,"尚无早期支持者")}</section></div></details>
+   </div>
+   <div class="detail-links">${isDetailPage?`<a class="button" href="./events.html?projectId=${id}">查看该项目事件轨迹</a><a class="button" href="./index.html">返回项目列表</a>`:`<a class="button" href="./project.html?id=${id}">查看完整详情</a>`}</div>
+  </div>
+  <div class="card-actions"><div class="action-heading"><span>项目操作</span><small>${role}</small></div><input class="amount" type="number" min="0.001" step="0.001" value="0.1"><button class="button primary donate">捐赠</button><button class="button end">结束项目</button><button class="button vote">投票支持第 ${stage} 阶段</button><button class="button release">释放第 ${stage} 阶段（${ethers.formatEther(release)} ETH）</button><button class="button withdraw">发起人一次性提现</button><button class="button refund">领取退款</button><button class="button cancel">取消空项目</button><p class="action-note">${this.escape(reason)}</p></div>`;
+  const $=s=>a.querySelector(s);
+  $(".cover").onerror=e=>e.target.style.display="none";
+  $(".donate").disabled=status!==0||remaining===0;
+  $(".end").disabled=status!==0||remaining>0;
+  $(".vote").disabled=!mode||!threshold||donation===0n||voted||p.creatorWithdrawn||stage>4;
+  $(".release").disabled=!mode||!threshold||!isCreator||votes<required||p.creatorWithdrawn||stage>4;
+  $(".withdraw").disabled=status!==1||!isCreator||p.creatorWithdrawn||p.milestonesCompleted>0;
+  $(".refund").disabled=status!==2||donation===0n;
+  $(".cancel").disabled=status!==0||!isCreator||p.totalRaised>0n;
+  $(".donate").onclick=()=>this.tx(`向项目 #${id} 捐赠`,()=>this.contract.donate(id,{value:ethers.parseEther($(".amount").value)}));
+  $(".end").onclick=()=>this.tx(`结束项目 #${id}`,()=>this.contract.endProject(id));
+  $(".vote").onclick=()=>this.tx(`为项目 #${id} 第 ${stage} 阶段投票`,()=>this.contract.voteForNextMilestone(id),true);
+  $(".release").onclick=()=>this.tx(`释放项目 #${id} 第 ${stage} 阶段`,()=>this.contract.releaseNextMilestone(id),true);
+  $(".withdraw").onclick=()=>this.tx(`提取项目 #${id} 资金`,()=>this.contract.withdrawFunds(id),true);
+  $(".refund").onclick=async()=>{const amount=await this.contract.getRefundableAmount(id,this.account);if(confirm(`确认领取 ${ethers.formatEther(amount)} ETH 未释放资金吗？`))this.tx(`项目 #${id} 退款`,()=>this.contract.refund(id))};
+  $(".cancel").onclick=()=>this.tx(`取消项目 #${id}`,()=>this.contract.cancelProject(id),true);
+  return a;
+ },
+ actionReason({status,isCreator,donation,remaining,p,threshold,voted,votes,required,stage}){
+  if(status===0&&remaining===0)return "项目已到截止时间，任何账户都可以结束项目";
+  if(status===0&&isCreator&&p.totalRaised===0n)return "可以继续筹资，或取消尚无捐赠的项目";
+  if(status===0&&donation>0n&&threshold&&!voted)return `已达到第 ${stage} 阶段门槛，可以参与投票`;
+  if(status===0&&isCreator&&threshold&&votes>=required)return `第 ${stage} 阶段投票已通过，可以释放资金`;
+  if(status===0)return "项目进行中，可以继续捐赠";
+  if(status===1&&isCreator&&!p.creatorWithdrawn&&p.milestonesCompleted===0n)return "项目成功，可以一次性提取全部资金";
+  if(status===1&&isCreator&&!p.creatorWithdrawn)return `里程碑模式已启动，可继续完成第 ${stage} 阶段`;
+  if(status===1&&p.creatorWithdrawn)return "项目成功，资金已经完成结算";
+  if(status===1)return "项目成功，等待发起人完成资金结算";
+  if(status===2&&donation>0n)return "项目失败，当前账户可以领取未释放资金退款";
+  if(status===2)return "项目失败，当前账户没有可退款捐赠";
+  return "项目已经取消，不再接受操作";
+ },
+ supporterList(addresses,emptyText){return addresses.length?`<ol class="supporter-list">${addresses.map((address,index)=>`<li><span>${index+1}</span><code>${address}</code></li>`).join("")}</ol>`:`<div class="supporter-empty">${emptyText}</div>`},
  async create(e){e.preventDefault();const f=e.target,deadline=Math.floor(new Date(f.deadline.value).getTime()/1000);if(deadline<this.now()+60)return this.log("截止时间至少晚于链上时间 1 分钟",true);await this.tx("创建项目",()=>this.contract.createProject(f.projectName.value.trim(),f.description.value.trim(),f.category.value,f.image.value.trim(),ethers.parseEther(f.goal.value),deadline));f.reset();this.defaultDeadline()},
  async tx(label,fn,confirmFirst=false){if(this.busy)return;if(confirmFirst&&!confirm(`${label}？该操作会写入区块链。`))return;try{this.busy=true;this.log(`${label}：等待 MetaMask 确认`);const tx=await fn();this.log(`交易已广播 ${this.short(tx.hash)}`);await tx.wait();this.log(`${label}：区块已确认`);await this.loadPage()}catch(e){this.fail(`${label}失败`,e)}finally{this.busy=false}},
  async loadDetail(){const id=Number(new URLSearchParams(location.search).get("id"));const rows=await this.rows(),r=rows.find(x=>Number(x.p.id)===id),el=document.getElementById("detail");el.innerHTML="";if(!r)return el.innerHTML='<div class="empty">项目不存在</div>';el.append(this.card(r))},
